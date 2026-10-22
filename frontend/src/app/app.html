@@ -1,0 +1,336 @@
+@if (!auth.isLoggedIn()) {
+  <app-login (loggedIn)="onLoggedIn()" />
+} @else {
+  <main class="page">
+    <section class="card">
+
+      <!-- Account bar -->
+      <div class="topbar">
+        <span class="user-chip">{{ auth.user()?.name }}</span>
+
+        <div class="topbar-actions">
+          @if (reminderState() === 'default') {
+            <button type="button" class="ghost-button" (click)="enableReminders()">
+              Turn on reminders
+            </button>
+          } @else if (reminderState() === 'granted') {
+            <span class="status-pill">Reminders on</span>
+          } @else if (reminderState() === 'denied') {
+            <span class="status-pill status-pill-off"
+                  title="Allow notifications for this site in your browser settings">
+              Reminders blocked
+            </span>
+          }
+
+          <button type="button" class="ghost-button" (click)="logout()">Log out</button>
+        </div>
+      </div>
+
+      <!-- Header -->
+      <header class="header">
+        <div>
+          <p class="eyebrow">YOUR WORKSPACE</p>
+          <h1>My Tasks</h1>
+          <p class="today">{{ today }}</p>
+        </div>
+
+        <div class="progress-circle">
+          <span>{{ progress() }}%</span>
+          <small>completed</small>
+        </div>
+      </header>
+
+      <!-- Progress bar -->
+      <div class="progress-track">
+        <div class="progress-fill" [style.width.%]="progress()"></div>
+      </div>
+
+      <p class="progress-caption">
+        {{ completedCount() }} of {{ tasks().length }} tasks completed
+      </p>
+
+      <!-- Error message -->
+      @if (errorMessage()) {
+        <div class="error-message" role="alert">
+          {{ errorMessage() }}
+        </div>
+      }
+
+      <!-- Add task form -->
+      <form class="task-form" (ngSubmit)="addTask()">
+        <input
+          type="text"
+          name="newTask"
+          [(ngModel)]="newTask"
+          placeholder="What needs to be done?"
+          aria-label="New task"
+          required
+        />
+
+        <select
+          name="newCategory"
+          [(ngModel)]="newCategory"
+          class="category-select"
+          aria-label="New task category">
+          @for (category of categories; track category) {
+            <option [value]="category">{{ category }}</option>
+          }
+        </select>
+
+        <select
+          name="newPriority"
+          [(ngModel)]="newPriority"
+          class="priority-select"
+          aria-label="New task priority">
+          <option value="low">Low priority</option>
+          <option value="medium">Medium priority</option>
+          <option value="high">High priority</option>
+        </select>
+
+        <input
+          type="date"
+          name="newDueDate"
+          [(ngModel)]="newDueDate"
+          class="due-date-input"
+          aria-label="New task due date"
+          title="Choose a due date"
+        />
+
+        <button type="submit" class="add-button">+ Add task</button>
+
+        <button
+          type="button"
+          class="ai-button"
+          [disabled]="suggesting() || !newTask.trim()"
+          (click)="suggestWithAi()">
+          {{ suggesting() ? 'Thinking…' : 'Suggest with AI' }}
+        </button>
+
+        @if (suggestionError()) {
+          <p class="ai-error" role="alert">{{ suggestionError() }}</p>
+        }
+
+        @if (suggestion(); as result) {
+          <div class="ai-panel">
+            <p class="ai-panel-title">AI suggestion</p>
+
+            <div class="ai-row">
+              <p>
+                Category: <strong>{{ result.category }}</strong>
+                &middot; Priority: <strong>{{ result.priority }}</strong>
+              </p>
+
+              <button
+                type="button"
+                class="ghost-button"
+                [disabled]="suggestionApplied()"
+                (click)="applySuggestion()">
+                {{ suggestionApplied() ? 'Applied ✓' : 'Apply to form' }}
+              </button>
+            </div>
+
+            @if (result.subtasks.length > 0) {
+              <p class="ai-steps-title">Suggested steps</p>
+
+              <ul class="ai-steps">
+                @for (step of result.subtasks; track $index) {
+                  <li>
+                    <label>
+                      <input
+                        type="checkbox"
+                        [checked]="isStepSelected($index)"
+                        (change)="toggleStep($index)"
+                      />
+                      <span>{{ step }}</span>
+                    </label>
+                  </li>
+                }
+              </ul>
+
+              <p class="ai-note">
+                Steps are added as separate tasks, using the category, priority and
+                due date shown in the form above.
+              </p>
+            }
+
+            <div class="ai-actions">
+              @if (result.subtasks.length > 0) {
+                <button
+                  type="button"
+                  class="ai-primary"
+                  [disabled]="addingSteps() || selectedSteps().length === 0"
+                  (click)="addSelectedSteps()">
+                  {{ addStepsLabel() }}
+                </button>
+              }
+
+              <button type="button" class="ghost-button" (click)="dismissSuggestion()">
+                Dismiss
+              </button>
+            </div>
+          </div>
+        }
+      </form>
+
+      <!-- Task filters -->
+      <nav class="filters" aria-label="Filter tasks">
+        @for (item of filters; track item.key) {
+          <button
+            type="button"
+            class="filter-button"
+            [class.active]="filter() === item.key"
+            (click)="filter.set(item.key)">
+            {{ item.label }}
+            <span>{{ countFor(item.key) }}</span>
+          </button>
+        }
+      </nav>
+
+      <!-- Task list -->
+      <div class="task-list">
+        @if (visibleTasks().length === 0) {
+          <div class="empty-state">
+            @if (filter() === 'done') {
+              <h3>No completed tasks yet</h3>
+              <p>Completed tasks will appear here.</p>
+            } @else if (filter() === 'active') {
+              <h3>You're all caught up!</h3>
+              <p>No active tasks. Enjoy the moment.</p>
+            } @else {
+              <h3>Your list is empty</h3>
+              <p>Add a task above to get started.</p>
+            }
+          </div>
+        }
+
+        @for (task of visibleTasks(); track task.id) {
+          <article class="task-item" [class.completed]="task.completed">
+
+            <!-- Completion toggle -->
+            <button
+              type="button"
+              class="complete-button"
+              [class.checked]="task.completed"
+              (click)="toggleTask(task)"
+              [attr.aria-label]="task.completed ? 'Mark as incomplete' : 'Mark as completed'">
+              @if (task.completed) {
+                ✓
+              }
+            </button>
+
+            <!-- Task details -->
+            <div class="task-content">
+
+              @if (editingTaskId() === task.id) {
+                <form class="edit-form" (ngSubmit)="saveEdit(task)">
+                  <input
+                    type="text"
+                    name="editedTitle"
+                    [(ngModel)]="editedTitle"
+                    aria-label="Edit task title"
+                    required
+                    autofocus
+                  />
+
+                  <button type="submit" class="small-button save-button">Save</button>
+
+                  <button
+                    type="button"
+                    class="small-button cancel-button"
+                    (click)="cancelEdit()">
+                    Cancel
+                  </button>
+                </form>
+              } @else {
+                <h3 class="task-title">{{ task.title }}</h3>
+              }
+
+              <!-- Category, priority and due date -->
+              <div class="task-meta">
+
+                <select
+                  class="category-select"
+                  (change)="updateCategory(task, $any($event.target).value)"
+                  [attr.aria-label]="'Category for ' + task.title">
+                  @for (category of categories; track category) {
+                    <option [value]="category" [selected]="category === task.category">
+                      {{ category }}
+                    </option>
+                  }
+                </select>
+
+                <select
+                  class="priority-select"
+                  [class.priority-high]="task.priority === 'high'"
+                  [class.priority-medium]="task.priority === 'medium'"
+                  [class.priority-low]="task.priority === 'low'"
+                  (change)="updatePriority(task, $any($event.target).value)"
+                  [attr.aria-label]="'Priority for ' + task.title">
+                  <option value="low" [selected]="task.priority === 'low'">Low</option>
+                  <option value="medium" [selected]="task.priority === 'medium'">Medium</option>
+                  <option value="high" [selected]="task.priority === 'high'">High</option>
+                </select>
+
+                <div class="task-due-date">
+                  <label [attr.for]="'due-date-' + task.id">Due</label>
+
+                  <input
+                    type="date"
+                    class="due-date-input"
+                    [id]="'due-date-' + task.id"
+                    [value]="task.due_date ?? ''"
+                    (change)="updateDueDate(task, $any($event.target).value)"
+                    [attr.aria-label]="'Due date for ' + task.title"
+                  />
+
+                  @if (task.is_overdue && !task.completed) {
+                    <span class="overdue-badge">Overdue</span>
+                  }
+
+                  @if (task.completed) {
+                    <span class="completed-badge">Completed</span>
+                  }
+                </div>
+              </div>
+            </div>
+
+            <!-- Task actions -->
+            <div class="task-actions">
+              @if (editingTaskId() !== task.id) {
+                <button
+                  type="button"
+                  class="icon-button"
+                  title="Edit task"
+                  aria-label="Edit task"
+                  (click)="startEdit(task)">
+                  ✎
+                </button>
+              }
+
+              <button
+                type="button"
+                class="icon-button delete-button"
+                title="Delete task"
+                aria-label="Delete task"
+                (click)="deleteTask(task)">
+                ×
+              </button>
+            </div>
+          </article>
+        }
+      </div>
+
+      <!-- Footer -->
+      @if (completedCount() > 0) {
+        <footer class="footer">
+          <span>{{ completedCount() }} completed</span>
+
+          <button type="button" class="clear-button" (click)="clearCompleted()">
+            Clear completed
+          </button>
+        </footer>
+      }
+
+    </section>
+  </main>
+}
